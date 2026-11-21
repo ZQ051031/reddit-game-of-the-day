@@ -2,3 +2,7 @@ node_modules
 .DS_Store
 dist
 .env
+/tools/output/
+/tools/screenshots/
+/tools/*.log
+/playtest-shots/

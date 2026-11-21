@@ -123,7 +123,8 @@ export function isDayKey(s: unknown): s is string {
   return (
     typeof s === 'string' &&
     /^\d{4}-\d{2}-\d{2}$/.test(s) &&
-    !Number.isNaN(Date.parse(`${s}T00:00:00Z`))
+    !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) &&
+    dayKeyFromDate(new Date(`${s}T00:00:00Z`)) === s
   );
 }
 

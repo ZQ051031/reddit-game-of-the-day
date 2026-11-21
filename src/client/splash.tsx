@@ -7,15 +7,18 @@ import { createRoot } from 'react-dom/client';
 import { formatDay, getDailyChallenge, initialState } from '../shared/puzzle';
 import { Board } from './components/Board';
 import { Logo } from './components/Logo';
+import { Flame } from './components/Flame';
 import { loadSession, offlineSession, onReddit } from './lib/api';
 import type { Session } from './lib/api';
 import { storage } from './lib/storage';
+import { useDayRollover } from './lib/useDayRollover';
 
 export const Splash = () => {
   const [session, setSession] = useState<Session>(offlineSession);
   useEffect(() => {
     void loadSession().then(setSession);
   }, []);
+  useDayRollover(session, setSession);
 
   const ch = getDailyChallenge(session.dayKey);
   const preview = ch.stages[0]!;
@@ -38,7 +41,9 @@ export const Splash = () => {
         </p>
         <div className="splash-meta">
           {session.stats.streak > 0 && (
-            <span className="chip">🔥 {session.stats.streak}-day streak</span>
+            <span className="chip">
+              <Flame /> {session.stats.streak}-day streak
+            </span>
           )}
           {session.board.players > 0 && (
             <span className="chip">{session.board.players} solved today</span>

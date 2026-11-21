@@ -2,6 +2,9 @@
 
 Upslide is a daily puzzle game built with **Devvit Web** (React 19 + Vite + Hono) for Reddit's _Game of the Day_ 2026.
 
+**Status: built and locally verified; not yet uploaded, published, or submitted.**
+See [SUBMISSION.md](SUBMISSION.md) for the remaining user checklist.
+
 Your puck is on ice. Once it moves, it doesn't stop until it hits a rock or a wall. Slide around the rink, **collect every upvote** and finish in as few moves as you can. Each day has three stages (**Warm-up → Tricky → Brutal**). Everyone on Reddit gets the same puzzle, and a new one appears every day at 00:00 UTC.
 
 | Feed (inline)              | Home                   | Playing                | Results                      |
@@ -13,21 +16,21 @@ Your puck is on ice. Once it moves, it doesn't stop until it hits a rock or a wa
 - **Swipe** the board, use the **arrow keys / WASD**, or tap the on-screen **d-pad**. The puck slides until something stops it.
 - Passing over an **upvote** collects it. You don't need to stop on it.
 - **Moss** (green tiles) stops the puck right where it lands.
-- **Par** is the true minimum number of moves, found by a solver. Finish at par for ★★★, par+2 for ★★, anything else for ★.
-- **Undo** (`Z` / Backspace) and **Restart** (`R`) are allowed, but each undo counts as a move, so the score stays honest.
+- **Par** is the true minimum number of slides, found by breadth-first search (BFS). Finish at par for ★★★, up to par+2 for ★★, otherwise ★.
+- **Undo** (`Z` / Backspace) and **Restart** (`R`) are allowed, but do not erase moves already counted.
 - Finish the daily to see your score, the global leaderboard, a histogram of how everyone did, and your streak. Then copy an emoji result grid to share in the comments.
 
 ## Features
 
 - **Deterministic daily challenge.** Every client and the server build the same 3 stages from the UTC date alone. No database or network is needed to load a puzzle.
 - **Guaranteed solvable, with an exact par.** A BFS solver checks every generated stage and gives the optimal move count.
-- **Cheat-resistant scoring.** The client sends its move log, not a score. The server replays the log against the day's puzzle and calculates the moves itself.
-- **Scores, streaks and daily results.** Stores played / current streak / best streak / perfect days / total stars for each user in Redis. Keeps a per-day leaderboard (fewest moves, then fastest time) and an "over par" histogram.
-- **Logged-out players can play.** Progress and stats are kept in `localStorage`. After the player logs in, the finished run is submitted.
+- **Replay-validated scoring.** The client sends its move log, not a score. The server replays it and calculates moves itself. Server elapsed time bounds timing claims, but automated play and actual active time remain unverified; this is not anti-cheat.
+- **Scores, streaks and daily results.** Completing consecutive UTC dates builds a streak. Stores played / current streak / best streak / perfect days / total stars for each user in Redis. Keeps a per-day leaderboard (fewest moves, then fastest time) and an "over par" histogram.
+- **Logged-out players can play.** Browser-local progress and stats survive reload in `localStorage`; authenticated rankings and stats use Devvit Redis.
 - **Daily posts are automatic.** A scheduler job creates the new daily post at 00:01 UTC. A post is also created when the app is installed, and moderators get a subreddit menu item called _"Upslide: post today's puzzle"_.
-- **Resumable runs.** You can close the post in the middle of a stage and continue later. The timer pauses while the tab is hidden.
-- **Archive / practice mode.** Replay any past day. Archive runs don't affect streaks or leaderboards.
-- **Mobile friendly.** Layout is a single column with large tap targets and swipe input that only works on the board. The inline feed card uses no gestures, so it never traps scroll. Includes sound effects (can be muted) and supports reduced motion.
+- **Resumable runs and UTC rollover.** Elapsed time is saved periodically and pauses on Home or while the tab is hidden. Open sessions refresh at UTC midnight using a server-clock offset; an in-progress yesterday run can still finish.
+- **Archive / practice mode.** Practice puzzles from the last 30 days, back to the puzzle epoch. Practice does not overwrite ranked results or affect streaks or leaderboards.
+- **Mobile friendly.** Responsive portrait and landscape layouts have large tap targets and swipe input that only works on the board. The inline feed card uses no gestures, so it never traps scroll. Includes sound effects (can be muted) and supports reduced motion.
 
 ## How the daily challenge works
 
@@ -36,8 +39,8 @@ All of the logic is in [`src/shared/puzzle.ts`](src/shared/puzzle.ts). The clien
 1. **Day key.** `dayKeyFromDate(now)` gives the UTC date as `YYYY-MM-DD`. Puzzle #1 is `2026-11-20`.
 2. **Seed.** Each stage `i` hashes `"upslide|<dayKey>|<i>"` with a 32-bit FNV-1a-style hash to a seed for a `mulberry32` PRNG.
 3. **Generate.** Using only that PRNG, the generator places rocks and moss on a 6×6 / 7×7 / 8×8 board and picks a start cell. It then simulates every slide the puck can make and drops upvotes on cells the puck actually passes over.
-4. **Solve and grade.** A breadth-first search over the state `(position, collected-mask)` finds the shortest solution. The generator keeps the first layout whose optimal length falls inside the stage's par range (5–7, 8–11, 11–15). It tries up to 400 layouts per stage, which takes about 0.3 ms per day on a laptop.
-5. **Same for everyone.** The output depends only on the date string, so everyone everywhere gets the same puzzle, and each date gives a different one. `src/shared/puzzle.test.ts` checks that 365 consecutive days are deterministic, solvable and within their par range.
+4. **Solve and grade.** A breadth-first search over `(position, collected-mask)` finds the shortest solution. The generator prefers layouts in the stage's par range (5–7, 8–11, 11–15), trying up to 400 candidates per stage.
+5. **Same for everyone.** Output depends only on the UTC day key and stage, not the local timezone. Tests cover a year of solvable stages, fresh regeneration and UTC boundaries. An independent iterative-deepening search proves exact par for 60 days × all three stages.
 
 ## Project layout
 
@@ -45,6 +48,8 @@ All of the logic is in [`src/shared/puzzle.ts`](src/shared/puzzle.ts). The clien
 devvit.json              Devvit app config (entrypoints, permissions, menu, trigger, scheduler)
 src/shared/puzzle.ts     PRNG, generator, BFS solver, move/undo engine, replay validation, scoring
 src/shared/api.ts        Types shared by client and server
+src/shared/progress.ts   Streaks, validation, timing and local-progress helpers
+src/shared/completion.ts Retry-safe completion orchestration
 src/client/splash.*      Inline feed card (lightweight, opens the expanded game)
 src/client/game.*        Full game (expanded view)
 src/client/components/   Board, Results, Help, StatsGrid, Countdown, Logo
@@ -52,47 +57,73 @@ src/client/lib/          API client w/ offline fallback, localStorage, Web Audio
 src/server/index.ts      Hono server entry
 src/server/routes/       /api/init, /api/board, /api/submit, menu, install trigger, daily scheduler
 src/server/core/         Redis store (results, leaderboard, histogram, streaks) and post creation
+tools/local-*.mjs        Local context/Redis harness and real-route tests
+tools/LOCAL.md           Harness controls and limitations
 ```
 
 ## Run locally
 
 Requirements: **Node.js ≥ 24** (see `.nvmrc`) and npm.
+If using nvm, load it with `source ~/.nvm/nvm.sh`, then select the repository's Node version.
 
 ```bash
-npm install
+npm ci
 npm run test:types   # TypeScript project build
 npm run lint         # ESLint
-npm run test:unit    # puzzle engine tests (365 days of generated puzzles)
+npm run test:unit    # engine, progress, retry and real-route integration tests
 npm run build        # builds dist/client (webview) and dist/server (index.cjs)
 ```
 
-To play the client in a normal browser, without Reddit, serve the built webview:
+To play in a normal browser with the real API routes and fake local users:
 
 ```bash
-npx vite build && npx serve dist/client   # or: cd dist/client && python3 -m http.server 4173
-# open http://localhost:4173/game.html   (splash card: /splash.html)
+npm run build
+npm run dev:local
+# open http://127.0.0.1:4173/game.html   (splash card: /splash.html)
 ```
 
-Outside Reddit the game runs in **offline mode**. It is the same daily puzzle with local streaks and stats, but it has no leaderboard.
+The loopback-only harness serves `dist/client` and runs the **real Hono API routes
+and store**, substituting only Devvit's server context and Redis with local stand-ins.
+No Reddit credentials are needed. Rebuild after client edits; memory state resets
+on harness restart. See [tools/LOCAL.md](tools/LOCAL.md) for fake users, clock
+controls, leaderboard seeding, offline simulation and limitations. Redis expiry,
+transactions and production concurrency are not modeled. Serving only the static
+client without this API instead exercises offline mode, without a leaderboard.
+
+### Scripts
+
+| Script | Behavior |
+| --- | --- |
+| `build` | Vite/Devvit production build |
+| `dev:local` | Built client and local API harness |
+| `dev` | `devvit playtest` against a test subreddit |
+| `test:types` | TypeScript project-reference build |
+| `lint` | ESLint over source TypeScript/TSX |
+| `test:unit` | Node test runner for source and harness tests |
+| `login` | Authorize Devvit CLI with Reddit |
+| `deploy` | Typecheck, lint, unit tests, then `devvit upload` |
+| `launch` | Deploy, then `devvit publish` |
+| `prettier` | Rewrite formatting across the repository |
+
+Generated builds, tool output, logs and playtest screenshots should not be committed.
+The original `docs/` images are illustrative; new playtest captures are separate.
 
 ## Deploy to Reddit (Devvit)
 
-You need a Reddit account and a subreddit you moderate to test in. All of these commands are run by **you**, the developer.
+Create a Reddit developer account at <https://developers.reddit.com/> and a test
+subreddit you moderate. All commands below are run by **you**, the developer;
+none of these upload/install/publish steps have been performed for this project.
 
 1. **Log in the CLI:** `npm run login` (runs `devvit login` and opens a browser to authorize).
-2. **Rename the app if needed.** App names are global on Reddit. If `upslide-game` is already taken, change `"name"` in `devvit.json` to a unique name with up to 16 characters, made of lowercase letters, digits and dashes.
-3. **Playtest:** `npm run dev`. This runs `devvit playtest`, uploads a dev build, installs it on a private test subreddit, and live-reloads on save. Open the subreddit, then use the subreddit menu **"Upslide: post today's puzzle"** to create a post. A post is also created automatically on install.
-4. **Upload a version:** `npm run deploy` (runs type-check, lint and `devvit upload`).
-5. **Publish:** `npm run launch` (runs `devvit publish`) submits the app for Reddit review so it can be installed on other subreddits.
+2. **Check the app name.** Choose an available name in `devvit.json` if required by the CLI.
+3. **Upload a version:** `npm run deploy` runs typecheck, lint, unit tests and `devvit upload`. Uploading is not publishing.
+4. **Install/playtest:** run `npx devvit install YOUR_TEST_SUBREDDIT` to install the uploaded app, then `npm run dev -- YOUR_TEST_SUBREDDIT` to upload/install development updates and stream logs. Use a small test subreddit (the CLI specifies fewer than 200 members).
+5. **Create a demo post:** open the subreddit and use the moderator menu **"Upslide: post today's puzzle"**. Installation also triggers post creation, so check for an existing post first. Verify inline/expanded gameplay, leaderboard and logged-in/out behavior on Reddit; the local harness cannot verify Reddit iframe or production Redis integration.
+6. **Publication is separate:** `npm run launch` deploys and invokes `devvit publish`. Review Reddit's current publication/review requirements before using it.
 
-The daily scheduler (`daily-post`, cron `1 0 * * *`) then posts each new puzzle automatically. Every post shows that day's puzzle, and older posts stay playable as practice.
+The daily scheduler (`daily-post`, cron `1 0 * * *`) is configured to create a post at 00:01 UTC once installed. Posts load the current daily puzzle; archive practice is available in-game.
 
-### Hackathon submission checklist
-
-- [ ] Public repo (this one)
-- [ ] App uploaded with `npm run deploy` and installed in a test subreddit
-- [ ] Link to a live Upslide post on Reddit
-- [ ] Devpost write-up (copy from the sections above)
+See [SUBMISSION.md](SUBMISSION.md) for the hackathon handoff and remaining checklist.
 
 ## License
 

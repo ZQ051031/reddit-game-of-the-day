@@ -1,6 +1,7 @@
 import type { StageScore } from './puzzle';
 
 export type UserStats = {
+  completedDays?: string[];
   played: number;
   streak: number;
   maxStreak: number;

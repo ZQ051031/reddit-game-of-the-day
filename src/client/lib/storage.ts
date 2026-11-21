@@ -1,6 +1,9 @@
 import type { DailyResult, UserStats } from '../../shared/api';
 import { emptyStats } from '../../shared/api';
-import { addDays } from '../../shared/puzzle';
+export {
+  applyCompletion as applyLocalCompletion,
+  liveStreak as liveLocalStreak,
+} from '../../shared/progress';
 
 const PREFIX = 'upslide:';
 
@@ -26,6 +29,7 @@ function write(key: string, value: unknown): void {
 export type SavedRun = { actions: string[]; stage: number; elapsedMs: number };
 
 export type LocalResult = DailyResult & {
+  ranked?: boolean;
   actions: string[];
   submitted: boolean;
 };
@@ -50,30 +54,3 @@ export const storage = {
   getSeenHelp: () => read<boolean>('seenHelp', false),
   setSeenHelp: () => write('seenHelp', true),
 };
-
-/** Mirrors the server streak rules for offline / logged-out play. */
-export function applyLocalCompletion(
-  stats: UserStats,
-  r: DailyResult
-): UserStats {
-  const next = { ...stats, played: stats.played + 1 };
-  if (!stats.lastDay || r.dayKey > stats.lastDay) {
-    next.streak =
-      stats.lastDay === addDays(r.dayKey, -1) ? stats.streak + 1 : 1;
-    next.lastDay = r.dayKey;
-  }
-  next.maxStreak = Math.max(next.maxStreak, next.streak);
-  if (r.totalMoves <= r.totalPar) next.perfectDays += 1;
-  next.totalStars += r.stages.reduce((a, s) => a + s.stars, 0);
-  return next;
-}
-
-export function liveLocalStreak(stats: UserStats, today: string): UserStats {
-  if (
-    !stats.lastDay ||
-    stats.lastDay === today ||
-    stats.lastDay === addDays(today, -1)
-  )
-    return stats;
-  return { ...stats, streak: 0 };
-}

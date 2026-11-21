@@ -17,6 +17,8 @@ import type {
   SubmitResponse,
 } from '../../shared/api';
 import { emptyStats } from '../../shared/api';
+import { isSubmitBody } from '../../shared/progress';
+import { ensureCompletion } from '../../shared/completion';
 import {
   addToBoard,
   getBoard,
@@ -25,6 +27,8 @@ import {
   liveStreak,
   recordCompletion,
   saveResult,
+  startDay,
+  verifiedTime,
 } from '../core/store';
 
 export const api = new Hono();
@@ -35,6 +39,7 @@ api.get('/init', async (c) => {
   const day = today();
   const { userId } = context;
   try {
+    if (userId) await startDay(day, userId);
     const username = userId
       ? ((await reddit.getCurrentUsername()) ?? null)
       : null;
@@ -81,7 +86,14 @@ api.post('/submit', async (c) => {
   }
   let body: SubmitRequest;
   try {
-    body = await c.req.json<SubmitRequest>();
+    const input: unknown = await c.req.json();
+    if (!isSubmitBody(input)) {
+      return c.json<ErrorResponse>(
+        { status: 'error', message: 'Invalid submission' },
+        400
+      );
+    }
+    body = input;
   } catch {
     return c.json<ErrorResponse>(
       { status: 'error', message: 'Invalid JSON' },
@@ -129,41 +141,26 @@ api.post('/submit', async (c) => {
   }
 
   const username = (await reddit.getCurrentUsername()) ?? userId;
-  const existing = await getResult(body.dayKey, userId);
-  if (existing) {
-    return c.json<SubmitResponse>({
-      type: 'submit',
-      result: existing,
-      stats: liveStreak(await getStats(userId), day),
-      board: await getBoard(body.dayKey, username),
-      alreadySubmitted: true,
-    });
-  }
-
   const result: DailyResult = {
     dayKey: body.dayKey,
     number: challenge.number,
     stages,
     totalMoves: stages.reduce((a, s) => a + s.moves, 0),
     totalPar: stages.reduce((a, s) => a + s.par, 0),
-    timeMs: Math.max(
-      1000,
-      Math.min(Number(body.timeMs) || 0, 24 * 3600 * 1000)
-    ),
+    timeMs: await verifiedTime(body.dayKey, userId, body.timeMs),
     submittedAt: Date.now(),
   };
-  const created = await saveResult(body.dayKey, userId, result);
-  if (created) await addToBoard(body.dayKey, username, result);
-  const stats = created
-    ? await recordCompletion(userId, result)
-    : await getStats(userId);
+  const saved = await ensureCompletion(
+    { saveResult, getResult, addToBoard, recordCompletion },
+    userId,
+    username,
+    result
+  );
   return c.json<SubmitResponse>({
     type: 'submit',
-    result: created
-      ? result
-      : ((await getResult(body.dayKey, userId)) ?? result),
-    stats: liveStreak(stats, day),
+    result: saved.result,
+    stats: liveStreak(saved.stats, day),
     board: await getBoard(body.dayKey, username),
-    alreadySubmitted: !created,
+    alreadySubmitted: saved.alreadySubmitted,
   });
 });

@@ -8,12 +8,13 @@ const fmt = (ms: number) => {
   return `${h}h ${m.toString().padStart(2, '0')}m ${(s % 60).toString().padStart(2, '0')}s`;
 };
 
-export const Countdown = () => {
-  const [left, setLeft] = useState(() => msUntilNextDay(Date.now()));
+export const Countdown = ({ offsetMs = 0 }: { offsetMs?: number }) => {
+  const [left, setLeft] = useState(() => msUntilNextDay(Date.now() + offsetMs));
   useEffect(() => {
-    const id = setInterval(() => setLeft(msUntilNextDay(Date.now())), 1000);
+    const tick = () => setLeft(msUntilNextDay(Date.now() + offsetMs));
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [offsetMs]);
   return (
     <div className="countdown">
       Next puzzle in <b>{fmt(left)}</b>

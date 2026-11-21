@@ -1,4 +1,5 @@
 import type { UserStats } from '../../shared/api';
+import { Flame } from './Flame';
 
 export const StatsGrid = ({ stats }: { stats: UserStats }) => (
   <div className="stats-grid">
@@ -9,7 +10,7 @@ export const StatsGrid = ({ stats }: { stats: UserStats }) => (
     <div>
       <b>
         {stats.streak}
-        {stats.streak > 0 ? '🔥' : ''}
+        {stats.streak > 0 && <Flame />}
       </b>
       <span>Streak</span>
     </div>

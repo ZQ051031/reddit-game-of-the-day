@@ -18,6 +18,7 @@ import {
   starRating,
 } from '../shared/puzzle';
 import type { Action, Dir, StageState } from '../shared/puzzle';
+import { elapsedRun, pauseRun, shouldSaveResult } from '../shared/progress';
 import { Board, STEP_MS } from './components/Board';
 import { Countdown } from './components/Countdown';
 import { Help } from './components/Help';
@@ -29,6 +30,7 @@ import type { Session } from './lib/api';
 import { isMuted, setMuted, sfx } from './lib/sound';
 import { applyLocalCompletion, storage } from './lib/storage';
 import type { LocalResult } from './lib/storage';
+import { useDayRollover } from './lib/useDayRollover';
 
 type Screen = 'loading' | 'home' | 'play' | 'results' | 'archive';
 
@@ -75,7 +77,7 @@ function rebuild(dayKey: string, actions: string[]): StageState[] {
 }
 
 function runElapsed(r: Run): number {
-  return r.baseMs + (r.since ? Date.now() - r.since : 0);
+  return elapsedRun(r, Date.now());
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -128,11 +130,15 @@ export const App = () => {
         timeMs: local.timeMs,
       });
       storage.setResult({ ...local, ...res.result, submitted: true });
-      setSession({
-        ...s,
-        stats: res.stats,
-        today: res.result,
-        board: res.board,
+      setSession((current) => {
+        const active = current ?? s;
+        return {
+          ...active,
+          stats: res.stats,
+          today:
+            res.result.dayKey === active.dayKey ? res.result : active.today,
+          board: res.result.dayKey === active.dayKey ? res.board : active.board,
+        };
       });
       setView({ result: res.result, ranked: true, board: res.board });
     } catch (err) {
@@ -150,20 +156,28 @@ export const App = () => {
       setScreen('home');
       // A logged-out player who finished and then logged in: push their saved run now.
       const local = storage.getResult(s.dayKey);
-      if (s.online && isLoggedIn() && !s.today && local && !local.submitted)
+      if (
+        s.online &&
+        isLoggedIn() &&
+        local &&
+        local.ranked !== false &&
+        !local.submitted
+      )
         void submitLocal(local, s);
       if (!storage.getSeenHelp()) setHelp(true);
     });
   }, [submitLocal]);
 
+  const onRollover = useCallback(() => {
+    if (screen !== 'play') setScreen('home');
+  }, [screen]);
+  useDayRollover(session, setSession, onRollover);
+
   const elapsed = () => (run.current ? runElapsed(run.current) : 0);
 
   const pauseTimer = () => {
     const r = run.current;
-    if (r && r.since) {
-      r.baseMs += Date.now() - r.since;
-      r.since = null;
-    }
+    if (r) pauseRun(r, Date.now());
   };
 
   const persist = () => {
@@ -177,6 +191,8 @@ export const App = () => {
   };
 
   const startRun = (dayKey: string, ranked: boolean) => {
+    pauseTimer();
+    persist();
     const saved = storage.getRun(dayKey);
     const states = rebuild(dayKey, saved?.actions ?? []);
     const stage = Math.min(saved?.stage ?? 0, states.length - 1);
@@ -205,6 +221,7 @@ export const App = () => {
       return { moves, par: p.par, stars: starRating(moves, p.par) };
     });
     const local: LocalResult = {
+      ranked: r.ranked,
       dayKey: r.dayKey,
       number: ch.number,
       stages,
@@ -215,8 +232,10 @@ export const App = () => {
       actions: r.states.map((s) => s.actions),
       submitted: false,
     };
-    storage.setResult(local);
+    if (shouldSaveResult(r.ranked, storage.getResult(r.dayKey)))
+      storage.setResult(local);
     storage.clearRun(r.dayKey);
+    run.current = null;
     setView({
       result: local,
       ranked: r.ranked,
@@ -229,7 +248,11 @@ export const App = () => {
     } else {
       const stats = applyLocalCompletion(storage.getStats(), local);
       storage.setStats(stats);
-      setSession({ ...session, stats, today: local });
+      setSession({
+        ...session,
+        stats,
+        today: r.dayKey === session.dayKey ? local : session.today,
+      });
     }
   }, [session, submitLocal]);
 
@@ -330,7 +353,14 @@ export const App = () => {
   // Timer tick + pause when the tab is hidden.
   useEffect(() => {
     if (screen !== 'play') return;
-    const id = setInterval(sync, 500);
+    const id = setInterval(() => {
+      sync();
+      persist();
+    }, 500);
+    const onHide = () => {
+      pauseTimer();
+      persist();
+    };
     const onVis = () => {
       const r = run.current;
       if (!r) return;
@@ -338,13 +368,34 @@ export const App = () => {
       else if (!r.states[r.stage]?.solved) r.since = Date.now();
       persist();
     };
+    const onShow = () => {
+      const r = run.current;
+      if (
+        r &&
+        r.since === null &&
+        !document.hidden &&
+        !r.states[r.stage]?.solved
+      ) {
+        r.since = Date.now();
+      }
+    };
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pagehide', onHide);
+    window.addEventListener('pageshow', onShow);
     return () => {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('pageshow', onShow);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
+
+  const goHome = () => {
+    pauseTimer();
+    persist();
+    setScreen('home');
+  };
 
   // Swipe controls.
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
@@ -406,11 +457,7 @@ export const App = () => {
 
   const topBar = (
     <div className="topbar">
-      <button
-        className="icon-btn"
-        onClick={() => setScreen('home')}
-        aria-label="Home"
-      >
+      <button className="icon-btn" onClick={goHome} aria-label="Home">
         <Logo small />
       </button>
       <div className="topbar-right">
@@ -506,7 +553,7 @@ export const App = () => {
             </p>
           )}
         </div>
-        <Countdown />
+        <Countdown offsetMs={session.offsetMs} />
       </div>
     );
   }
@@ -523,8 +570,8 @@ export const App = () => {
       <div className="screen archive">
         <h2>Past puzzles</h2>
         <p className="muted small">
-          Practice any earlier day. Archive runs don’t affect your streak or the
-          leaderboard.
+          Practice puzzles from the last 30 days. Archive runs don’t affect your
+          streak or the leaderboard.
         </p>
         {days.length === 0 && (
           <div className="card center muted">
@@ -574,6 +621,11 @@ export const App = () => {
     const stars = starRating(st.moves, puzzle.par);
     body = (
       <div className="screen play">
+        {r.ranked && r.dayKey !== today && (
+          <p className="muted small">
+            A new daily puzzle is ready on Home. You can still finish this run.
+          </p>
+        )}
         <div className="play-head">
           <div className="stage-pips">
             {ch.stages.map((_, i) => (
@@ -702,9 +754,14 @@ export const App = () => {
     const isToday = view.result.dayKey === today;
     body = (
       <Results
+        offsetMs={session.offsetMs}
         result={view.result}
         board={
-          view.ranked ? (session.today ? session.board : view.board) : null
+          view.ranked
+            ? view.result.dayKey === today && session.today
+              ? session.board
+              : view.board
+            : null
         }
         stats={view.ranked ? session.stats : null}
         ranked={view.ranked}
@@ -716,7 +773,7 @@ export const App = () => {
         onShare={() => void share()}
         onLogin={loginAction}
         onArchive={() => setScreen('archive')}
-        onHome={() => setScreen('home')}
+        onHome={goHome}
       />
     );
   }

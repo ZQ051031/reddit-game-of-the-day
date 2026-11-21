@@ -4,6 +4,7 @@ import { Countdown } from './Countdown';
 import { StatsGrid } from './StatsGrid';
 
 type Props = {
+  offsetMs: number;
   result: DailyResult;
   board: DayBoard | null;
   stats: UserStats | null;
@@ -178,7 +179,7 @@ export const Results = (p: Props) => {
         </div>
       )}
 
-      {p.isToday && <Countdown />}
+      {p.isToday && <Countdown offsetMs={p.offsetMs} />}
 
       <button className="btn btn-ghost btn-block" onClick={p.onHome}>
         Back to start
